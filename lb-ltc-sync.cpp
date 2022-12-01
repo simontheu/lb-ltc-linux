@@ -65,6 +65,6 @@ int main(void)
 		}
 	}
 
-	close(s);
+	pclose(s);
 	return 0;
 }
