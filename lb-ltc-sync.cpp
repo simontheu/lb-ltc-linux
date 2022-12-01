@@ -1,140 +1,70 @@
-#include <iostream>
-using namespace std;
-
-/* Linux */
-#include <linux/types.h>
-#include <linux/input.h>
-#include <linux/hidraw.h>
-
-/* Unix */
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-
-/* C */
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <stdint.h>
-#include <getopt.h>
-
-#include <time.h>
-
-//Leo GPS Clock
-#include "GPSSettings.h"
-
 /*
- * Ugly hack to work around failing compilation on systems that don't
- * yet populate new version of hidraw.h to userspace.
- */
-#ifndef HIDIOCSFEATURE
-#warning Please have your distro update the userspace kernel headers
-#define HIDIOCSFEATURE(len)    _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, len)
-#define HIDIOCGFEATURE(len)    _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x07, len)
-#endif
+	Simple udp server
+*/
+#include<stdio.h>	//printf
+#include<string.h> //memset
+#include<stdlib.h> //exit(0);
+#include<arpa/inet.h>
+#include<sys/socket.h>
 
-#define HIDIOCGRAWNAME(len)     _IOC(_IOC_READ, 'H', 0x04, len)
+#define BUFLEN 512	//Max length of buffer
+#define PORT 8888	//The port on which to listen for incoming data
 
-const char *bus_str(int bus);
-
-int main(int argc, char **argv)
+void die(char *s)
 {
-      cout << "Leo Bodnar GPS Clock Status" << endl;
-      
-      int fd;
-      int i, res, desc_size = 0;
-      u_int8_t buf[60];
+	perror(s);
+	exit(1);
+}
 
-      struct hidraw_devinfo info;
-
-   /* Open the Device with non-blocking reads. In real life,
-      don't use a hard coded path; use libudev instead. 
-   */
-
-
-      printf("Opening device %s\n", argv[1]);
-
-      fd = open(argv[1], O_RDWR|O_NONBLOCK);
-
-      if (fd < 0) 
-      {
-            perror("Unable to open device");
-            return 1;
-      }
-
-      //Device connected, setup report structs
-      memset(&info, 0x0, sizeof(info));
-
-      // Get Raw Info
-      res = ioctl(fd, HIDIOCGRAWINFO, &info);
-      
-      if (res < 0) 
-      {
-            perror("HIDIOCGRAWINFO");
-      } 
-      else
-      {
-            printf("Device Info:\n");
-            printf("\tvendor: 0x%04hx\n", info.vendor);
-            printf("\tproduct: 0x%04hx\n", info.product);
-            if (info.vendor != VID_LB_USB || (info.product != PID_GPS_CLOCK && info.product != PID_MINI_GPS_CLOCK)) {
-                perror("Not a valid GPS Clock Device");
-                return -1;//Device not valid
-            }
-      }
-
-      /* Get Raw Name */
-      res = ioctl(fd, HIDIOCGRAWNAME(256), buf);
-
-      if (res < 0)
-            perror("HIDIOCGRAWNAME");
-      else
-            printf("Device Name: %s\n", buf);
-            /* Get Status */
-            int timeout = 0;
-            while (timeout < 1000){
-                int report_len = read(fd, buf, sizeof (buf));
-                printf(".");
-                if (report_len < 1)  {
-                    printf(".");
-                    //Create some delay before trying again.
-                    for (i = 0; i< 10000000; i++) {
-                        report_len = i*i;
-                    }
-                    timeout++;
-                } else {
-                    printf("\n");
-                    printf("Loss of Signal Count: %i\n", buf[0]);
-                    if (buf[1] & 0x01) {
-                        printf("Sat Status: Unlocked\n");
-                    } else {
-                        printf("Sat Status: Locked\n");
-                    }
-                    if (buf[1] & 0x02) {
-                        printf("PLL Status: Unlocked\n");
-                    } else {
-                        printf("PLL Status: Locked\n");
-                    }
-                    return buf[1] & 0x03;//Return locked status
-                }
-            }
-
-      close(fd);
-
-      return 0;
-      }
-
-const char * bus_str(int bus)
+int main(void)
 {
-   switch (bus) 
-   {
-      case BUS_USB:       return "USB";       break;
-      case BUS_HIL:       return "HIL";       break;
-      case BUS_BLUETOOTH: return "Bluetooth"; break;
-      case BUS_VIRTUAL:   return "Virtual";   break;
-      default: return "Other"; break;
-   }
+	struct sockaddr_in si_me, si_other;
+	
+	int s, i, slen = sizeof(si_other) , recv_len;
+	char buf[BUFLEN];
+	
+	//create a UDP socket
+	if ((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
+	{
+		die("socket");
+	}
+	
+	// zero out the structure
+	memset((char *) &si_me, 0, sizeof(si_me));
+	
+	si_me.sin_family = AF_INET;
+	si_me.sin_port = htons(PORT);
+	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+	
+	//bind socket to port
+	if( bind(s , (struct sockaddr*)&si_me, sizeof(si_me) ) == -1)
+	{
+		die("bind");
+	}
+	
+	//keep listening for data
+	while(1)
+	{
+		printf("Waiting for data...");
+		fflush(stdout);
+		
+		//try to receive some data, this is a blocking call
+		if ((recv_len = recvfrom(s, buf, BUFLEN, 0, (struct sockaddr *) &si_other, &slen)) == -1)
+		{
+			die("recvfrom()");
+		}
+		
+		//print details of the client/peer and the data received
+		printf("Received packet from %s:%d\n", inet_ntoa(si_other.sin_addr), ntohs(si_other.sin_port));
+		printf("Data: %s\n" , buf);
+		
+		//now reply the client with the same data
+		if (sendto(s, buf, recv_len, 0, (struct sockaddr*) &si_other, slen) == -1)
+		{
+			die("sendto()");
+		}
+	}
+
+	close(s);
+	return 0;
 }
